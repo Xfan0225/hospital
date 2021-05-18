@@ -992,6 +992,12 @@ class DiagnoseSystem:
 
     @staticmethod
     def create_medicine(diagnose_id, medicine_info: List[tuple]):
+        """
+        创建开药单
+        :param diagnose_id:
+        :param medicine_info:
+        :return:
+        """
         diag_info = DiagnoseInfo()
         diag_info.load_all_from_database(diagnose_id=diagnose_id)
 
@@ -1008,6 +1014,12 @@ class DiagnoseSystem:
 
     @staticmethod
     def create_diagnose(diagnose_id, diagnose_info):
+        """
+        创建诊断打么
+        :param diagnose_id:
+        :param diagnose_info:
+        :return:
+        """
         diag_info = DiagnoseInfo()
         diag_info.load_all_from_database(diagnose_id=diagnose_id)
         diag_info.add_diagnose(diagnose_info)
@@ -1133,7 +1145,6 @@ class AIDiagnoseSystem:
 # TODO:有些类之间传类变量感觉冗余，能传id尽量传id。
 # TODO:所有List[tuple]类型可直接改成dict，但会失去顺序，需讨论
 # TODO:全部数据库连接工作未完成
-# TODO:评论未完成
 # TODO:某些状态检查支付没有做，要保证按顺序调用函数
 
 CommentAnalysisSystem().single_predict('医术高明，妙手回春')
