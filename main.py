@@ -1,3 +1,4 @@
+# patient._gender是int,不是str
 import os
 import pickle
 import string
@@ -9,14 +10,21 @@ import numpy as np
 from typing import List, Dict, Tuple
 from keras.preprocessing import sequence
 from keras.engine.saving import load_model
+import datetime
+import json
 
-# from patient.models import Register, Fee, Diagnose, Prescribe, PatientBase, PatientHealth
+from Comment import CommentAnalysisSystem
+
+nan = np.nan
 
 BASE_DIR = os.path.dirname('/Users/xie/PycharmProjects/hospital')
 sys.path.append(BASE_DIR)
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'hospital.settings')
 django.setup()
+
+from patient.models import Register, Fee, Diagnose, Prescribe, PatientBase, PatientHealth
+from doctor.models import Remark, Department, Medicine, CheckItem, DoctorBase, Check, CheckDetail, Roster
 
 
 class NoAttrError(Exception):
@@ -107,14 +115,37 @@ class PatientInfo:
         """
         self._id = p_id
         # TODO:加载所有信息，或者
-        pass
+        if len(PatientBase.objects.all().filter(pid=p_id)) > 0:
+            patientbase = PatientBase.objects.get(pid=p_id)
+            self._id = patientbase.pid
+            self._name = patientbase.pname
+            self._gender = patientbase.pgender
+            self._age = int(datetime.date.today().year - patientbase.pbirth.year)
+            self._password = patientbase.password
+        if len(PatientHealth.objects.all().filter(pid=p_id)) > 0:
+            patienthealth = PatientHealth.objects.get(pid=p_id)
+            self._body_info = patienthealth.__dict__
+        if len(Diagnose.objects.all().filter(pid=p_id)) > 0:
+            diagnose = Diagnose.objects.all().filter(pid=p_id)
+            for i in diagnose:
+                self._diagnose_history.append(i.__dict__)
+        if len(Register.objects.all().filter(pid=p_id)) > 0:
+            register = Register.objects.all().filter(pid=p_id)
+            for i in register:
+                self._register_history.append(i.__dict__)
 
     def write_all_to_database(self):
         """
         将所有信息写入数据库
         :return:
         """
-        pass
+        if len(PatientBase.objects.all().filter(pid=self._id)) > 0:
+            patientbase = PatientBase.objects.get(pid=self._id)
+            patientbase.pname = self._name
+            patientbase.pgender = self._gender
+            patientbase.password = self._password
+        else:
+            PatientBase.objects.create(pid=self._id, pname=self._name, pgender=self._gender, password=self._password)
 
     def create_id(self, new_password):
         # TODO:创建新用户的ID与密码
@@ -176,28 +207,55 @@ class PatientInfo:
         :param attr:
         :return:
         """
-        pass
+        if attr == 'gender':
+            if len(PatientBase.objects.all().filter(pid=self._id)) > 0:
+                patientbase = PatientBase.objects.get(pid=self._id)
+                self._gender = patientbase.pgender
+        elif attr == 'name':
+            if len(PatientBase.objects.all().filter(pid=self._id)) > 0:
+                patientbase = PatientBase.objects.get(pid=self._id)
+                self._name = patientbase.pname
+        elif attr == 'age':
+            if len(PatientBase.objects.all().filter(pid=self._id)) > 0:
+                patientbase = PatientBase.objects.get(pid=self._id)
+                self._age = patientbase.page
+        elif attr == 'diagnose':
+            if len(Diagnose.objects.all().filter(pid=self._id)) > 0:
+                diagnose = Diagnose.objects.all().filter(pid=self._id)
+                self._diagnose_history = []
+                for i in diagnose:
+                    self._diagnose_history.append(i.__dict__)
+        elif attr == 'register':
+            if len(Register.objects.all().filter(pid=self._id)) > 0:
+                register = Register.objects.all().filter(pid=self._id)
+                self._register_history = []
+                for i in register:
+                    self._register_history.append(i.__dict__)
+        elif attr == 'body_info':
+            if len(PatientHealth.objects.all().filter(pid=self._id)) > 0:
+                patienthealth = PatientHealth.objects.get(pid=self._id)
+                self._body_info = patienthealth.__dict__
 
     def _load_diagnose_history(self):
         """
         加载患者历史就诊信息
         :return:
         """
-        pass
+        self._load_info_from_database(self, 'diagnose')
 
     def _load_register_history(self):
         """
         加载患者历史挂号信息
         :return:
         """
-        pass
+        self._load_info_from_database(self, 'register')
 
     def _load_body_info(self):
         """
         加载患者身体信息
         :return:
         """
-        pass
+        self._load_info_from_database(self, 'body_info')
 
     def _write_info_to_database(self, attr: str):
         """
@@ -231,6 +289,15 @@ class ScheduleInfo:
         else:
             raise NoAttrError('医生排班已满', '医生排班不得超过50', '医生排班')
 
+    def get_register_number(self):
+        return len(self._schedule_register)
+
+    def get_max_register_number(self):
+        return self._max_schedule_number
+
+    def get_register(self):
+        return self._schedule_register
+
     def get_spare_number(self):
         """
         获取医生空余号量
@@ -252,11 +319,17 @@ class ScheduleInfo:
         # TODO: 从数据库加载所有信息
         # TODO: 加载当日最大排班数量！
         self._doctor_id = doctor_id
-        pass
+        if len(Roster.objects.filter(id=doctor_id)) > 0:
+            roster = Roster.objects.get(id=doctor_id)
+            self._schedule_register = json.loads(roster.reservations)
+            self._max_schedule_number = roster.remain
 
     def _write_info_to_database(self):
         # TODO:储存当前信息至数据库
-        pass
+        if len(Roster.objects.filter(id=self._doctor_id)) > 0:
+            roster = Roster.objects.get(id=self._doctor_id)
+            roster.reservations = json.dumps(self._schedule_register)
+            roster.remain = self._max_schedule_number
 
 
 class DoctorInfo:
@@ -266,16 +339,33 @@ class DoctorInfo:
         self._doctor_id = doctor_id
         self._doctor_name = doctor_name
         self._doctor_title = None
-        self._department = None
+        self._department: str = None
         self._password = None
 
-    def load_all_from_database(self):
-        # TODO:从数据库加载所有信息
-        pass
+    def get_dept(self):
+        return self._department
+
+    def load_all_from_database(self, doctor_id):
+        self._doctor_id = doctor_id
+        doctorbase = DoctorBase.objects.get(doc_id=self._doctor_id)
+        self._doctor_name = doctorbase.doc_name
+        self._password = doctorbase.password
+        self._department = Department.objects.get(dept_id=doctorbase.dept_id).dept_name
 
     def _write_info_to_database(self, attr):
         # TODO:写入信息至数据库
-        pass
+        if attr == 'doctor_name':
+            if len(DoctorBase.objects.filter(doc_id=self._doctor_id)) > 0:
+                doctorbase = DoctorBase.objects.get(doc_id=self._doctor_id)
+                doctorbase.doc_name = self._doctor_name
+            else:
+                DoctorBase.objects.create(doc_id=self._doctor_id, doc_name=self._doctor_name)
+        if attr == 'password':
+            if len(DoctorBase.objects.filter(doc_id=self._doctor_id)) > 0:
+                doctorbase = DoctorBase.objects.get(doc_id=self._doctor_id)
+                doctorbase.password = self._password
+            else:
+                DoctorBase.objects.create(doc_id=self._doctor_id, password=self._password)
 
     def login(self, password):
         """
@@ -312,6 +402,12 @@ class DepartmentInfo:
         self._dept_name = None
         self._doctor_id_list = []
 
+    def load_data(self, dept_id):
+        if len(Department.objects.filter(dept_id=dept_id)) > 0:
+            department = Department.objects.filter(dept_id=dept_id)
+            for i in department:
+                self._doctor_id_list.append(i.doc_id_id)
+
     def get_doctor_id_list(self):
         # TODO:获取科室中的医生
         pass
@@ -334,6 +430,12 @@ class RegisterInfo:
         self._register_id = register_id
         self._payment_id = None
         self._status = None
+
+    def find_latest_id(self):
+        """TODO:根据医生id与病人id从数据库找最新的挂号id"""
+        regs_info = Register.objects.filter(doc_id_id=self._doctor_id, pid_id=self._patient_id).order_by("register_id").reverse().first()
+        self._register_id = regs_info.register_id
+        return self._register_id
 
     def create_id(self):
         """
@@ -379,17 +481,21 @@ class RegisterInfo:
         :return:
         """
         self._register_id = register_id
+        register = Register.objects.get(register_id=register_id)
+        self._patient_id = register.pid
+        self.doctor_id = register.doc_id
+        self.payment_id = Fee.objects.get(register_id=register_id).fee_id
+        self._status = register.status
         # TODO:加载所有信息
         pass
 
-    #
-    # def add_payment(self, payment_id):
-    #     """
-    #     更改付款单状态
-    #     :param payment_id:
-    #     :return:
-    #     """
-    #     self._payment_id = payment_id
+    def add_payment(self, payment_id):
+        """
+        将付款单信息写入
+        :param payment_id:
+        :return:
+        """
+        self._payment_id = payment_id
 
     def change_status(self, new_status):
         """
@@ -399,18 +505,34 @@ class RegisterInfo:
         """
         self._status = new_status
 
+    def get_status(self):
+        return self._status
+
 
 class CheckInfo:
     """检查信息类，主要负责加载检查描述与价格等信息"""
 
     def __init__(self):
         self._check_id = None
-        self._check_money = None
         self._check_price = None
+        self._check_name = None
+        self._check_detail = None
 
     def load_all_from_database(self, check_id):
         # TODO:提供检查编号，加载检查信息
-        pass
+        check = CheckItem.objects.get(check_id=check_id)
+        self._check_price = check.check_price
+        self._check_name = check.check_name
+        # print(self._check_price)
+
+    def get_name(self):
+        return self._check_name
+
+    def get_price(self):
+        return self._check_price
+
+    def get_info(self):
+        return self._check_detail
 
 
 class MedicineInfo:
@@ -421,14 +543,32 @@ class MedicineInfo:
         self._medicine_class = None
         self._medicine_price = None
         self._medicine_stock = None
+        self._medicine_name = None
         self._medicine_fast_spell = None  # 药品快拼
 
     def consume_medicine(self, medicine_id, medicine_num):
         """TODO:消耗药品，提供id与消耗数量"""
         pass
 
+    def find_fast_spell(self, fast_spell):
+        medicine = Medicine.objects.get(initial_py=fast_spell)
+        self.load_all_from_database(medicine_id=medicine.med_id)
+
     def load_all_from_database(self, medicine_id):
         """TODO:提供药品id，从数据库中加载药品所有信息"""
+        medicine = Medicine.objects.get(med_id=medicine_id)
+        self._medicine_id = medicine_id
+        self._medicine_class = medicine.med_class
+        self._medicine_stock = medicine.med_stock
+        self._medicine_price = medicine.med_price
+        self._medicine_name = medicine.med_name
+        self._medicine_fast_spell = medicine.initial_py
+
+    def get_id(self):
+        return self._medicine_id
+
+    def get_name(self):
+        return self._medicine_name
 
 
 class PaymentInfo:
@@ -498,7 +638,13 @@ class PaymentInfo:
         :return:
         """
         self._payment_id = payment_id
-        pass
+        fee = Fee.objects.get(fee_id=payment_id)
+
+        self._money = fee.fee_total
+        self._detail_info = json.loads(fee.fee_content)
+        self._diagnose_info = fee.diagnose_id
+        self._register_info = fee.register_id
+        self._update_time = fee.fee_date
 
     def cal_money(self):
         """
@@ -538,6 +684,18 @@ class DiagnoseInfo:
         self._medicine_info = []
         self._check_info = []
         self._payment_info = []
+
+    def get_diagnose_info(self):
+        return self._diagnose_info
+
+    def get_medicine_info(self):
+        return self._medicine_info
+
+    def get_register_id(self):
+        return self._register_id
+
+    def get_diagnose_info(self):
+        return self._diagnose_info
 
     def add_diagnose(self, diagnose_info: str):
         """
@@ -608,36 +766,53 @@ class DiagnoseInfo:
     def load_all_from_database(self, diagnose_id):
         self._diagnose_id = diagnose_id
         # TODO:提供ID，从database加载所有信息
-        pass
+        diagnose = Diagnose.objects.get(diagnose_id=diagnose_id)
+        self._patient_id = diagnose.pid.pid
+        # print(diagnose.register_id.register_id)
+        self._doctor_id = Register.objects.get(register_id=diagnose.register_id.register_id).doc_id_id
+        self._register_id = diagnose.register_id.register_id
+        self._diagnose_info = diagnose.diagnose_text
+        self._diagnose_create_time = diagnose.diagnose_date
+        self._medicine_info = eval(Prescribe.objects.get(prescribe_id=diagnose.medicine_id).prescribe_content)
+        self._check_info = eval(Check.objects.get(diagnose_id=diagnose_id).check_list)
+        # print(self._medicine_info)
 
     def _write_info_to_database(self, attr):
         # TODO:将信息写入数据库（可做分属性写入）
         pass
 
+    def get_check(self):
+        return self._check_info
+
 
 class PatientCheckInfo:
     """病人检查单的信息类，每次医生开检查就创建一个"""
 
-    def __init__(self, diagnose_info: DiagnoseInfo = None, check_id: int = None):
+    def __init__(self, diagnose_id: int = None, detail_id: int = None):
         """初始化时必须传入诊断单类"""
-        self._diagnose_info = diagnose_info  # 诊断类
-        self._check_id = check_id  # 检查单ID
-        self._check_name = []  # 检查名称列表，为需要做的检查
-        self._check_info = {}  # 检查结果，为字典{检查名:结果}
-        self._create_time = None
-        self._last_update_time = None
+        self._diagnose_id = diagnose_id  # 诊断单id
+        self._detail_id = detail_id  # 细节id
+        self._check_name = None  # 检查名称
+        self._check_info_id = None  # 检查名称id
+        self._check_info = {}  # 检查结果，为字典, {检查属性:结果}
+        self._check_status = None  # 检查状态0未缴费，1已缴费，2已检查（TODO:数据库新增状态列），由check_name对应
+        self._create_time = None  # check_name: time
+        self._last_update_time = None  # update_time: time
 
-    def create_prescribe_check(self, check_name: list = None):
+    def create_prescribe_check(self, check_info_id: str = None):
         """
-        创建检查单，需要传入检查名称的列表
-        :param check_name: 检查名称的列表
+        创建检查单，需要传入检查名称的id
+        :param check_info_id: 检查名称id
         :return:
         """
         # TODO:检查名称列表合法性检查（不存在的检查）
         self._create_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         self._last_update_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        self._check_name = check_name
-        self._check_info = {i: None for i in check_name}
+        self._check_info_id = check_info_id
+        check_info = CheckInfo()
+        check_info.load_all_from_database(check_id=check_info_id)
+        self._check_name = check_info.get_name()
+        self._check_info = {i: nan for i in check_info.get_info()}
         self._write_info_to_database()
         self._diagnose_info.add_check(self._check_id)
 
@@ -671,10 +846,21 @@ class PatientCheckInfo:
         :param attr: 检查属性
         :return:
         """
-        if attr not in self._check_name:
-            raise NoAttrError(attr, self._check_name, '更新检查信息')
+        if attr == 'all':
+            return self._check_info
+        elif attr not in self._check_name:
+            raise NoAttrError(attr, self._check_name, '获取检查信息')
         else:
             return self._check_info[attr]
+
+    def get_time(self):
+        return self._last_update_time
+
+    def get_status(self):
+        return self._check_status
+
+    def get_name_list(self):
+        return self._check_name
 
     def load_all_from_database(self, check_id):
         """
@@ -683,22 +869,45 @@ class PatientCheckInfo:
         :return:
         """
         # TODO:完成全部加载与按属性加载的功能
+        if len(CheckDetail.objects.filter(detail_id=check_id)) > 0:
+            # print(i)
+            check_detail = CheckDetail.objects.get(detail_id=check_id)
+            self._last_update_time = check_detail.check_time.strftime("%Y-%m-%d %H:%M:%S")
+            # print(check_detail.report_content)
+            self._check_info = eval(check_detail.report_content)
+            self._check_name = self._check_info.keys()
 
     def _write_info_to_database(self):
         """
         # TODO:信息写入数据库，可按属性写与全部写
         :return:
         """
-        pass
+        if len(Check.objects.filter(report_id=self._check_id)) > 0:
+            check = Check.objects.get(report_id=self._check_id)
+            check.report_id = self._check_id
+            check.diagnose_id_id = self._diagnose_info.diagnose_id
+            check.pid_id = self._diagnose_info.pid
+            check.check_list = json.dumps(self._check_name)
+        else:
+            Check.objects.create(report_id=self._check_id, diagnose_id_id=self._diagnose_info.diagnose_id,
+                                 pid_id=self._diagnose_info.pid, check_list=json.dumps(self._check_name))
+        for i in self._check_info.keys():
+            if len(CheckDetail.objects.filter(detail_id=i, diagnose_id_id=self._diagnose_info.diagnose_id)) > 0:
+                checkdetail = CheckDetail.objects.get(detail_id=i, diagnose_id_id=self._diagnose_info.diagnose_id)
+                checkdetail.report_content = json.dumps(self._check_info[i])
+            else:
+                CheckDetail.objects.create(detail_id=i, diagnose_id_id=self._diagnose_info.diagnose_id,
+                                           report_content=json.dumps(self._check_info[i]))
 
 
 class PatientMedicineInfo:
     """病人开药单中的信息类，每次医生的开药操作均生成一个该信息"""
 
-    def __init__(self, diagnose_info: DiagnoseInfo, patient_medicine_id: int = None, medicine_info: List[tuple] = None):
+    def __init__(self, diagnose_info: DiagnoseInfo = None, patient_medicine_id: int = None,
+                 medicine_info: List[tuple] = None):
         """初始化时必须传入诊断信息类"""
         self._patient_medicine_id = patient_medicine_id
-        self._diagnose_info = diagnose_info
+        self._diagnose_info = diagnose_info  # 诊断类
         self._medicine_info = medicine_info
         self._create_time = None
 
@@ -726,10 +935,27 @@ class PatientMedicineInfo:
 
     def _write_info_to_database(self, attr):
         # TODO: 将当前信息写入数据库
-        pass
+        if attr == 'diagnose_info':
+            if len(Prescribe.objects.filter(prescribe_id=self._patient_medicine_id)):
+                prescibe = Prescribe.objects.get(prescibe_id=self._patient_medicine_id)
+                prescibe.diagnose_id_id = self._diagnose_info.diagnose_id
+            else:
+                Prescribe.objects.create(prescibe_id=self._patient_medicine_id,
+                                         diagnose_id_id=self._diagnose_info.diagnose_id)
+        if attr == 'medicine_info':
+            if len(Prescribe.objects.filter(prescribe_id=self._patient_medicine_id)):
+                prescibe = Prescribe.objects.get(prescribe_id=self._patient_medicine_id)
+                prescibe.prescribe_content = json.dumps(self._medicine_info)
+            else:
+                Prescribe.objects.create(prescribe_id=self._patient_medicine_id,
+                                         prescribe_content=json.dumps(self._medicine_info))
 
-    def _load_info_from_database(self):
-        pass
+    def load_all_from_database(self, patient_medicine_id):
+        self._patient_medicine_id = patient_medicine_id
+        if len(Prescribe.objects.filter(prescribe_id=self._patient_medicine_id)):
+            prescibe = Prescribe.objects.get(prescibe_id=self._patient_medicine_id)
+            self._diagnose_info = Diagnose.objects.get(diagnose_id=prescibe.diagnose_id_id)
+            self._medicine_info = json.loads(prescibe.prescribe_content)
 
 
 class CommentInfo:
@@ -772,7 +998,9 @@ class CommentInfo:
 
     def _write_info_to_database(self, attr='all'):
         # TODO: 将当前信息写入数据库
-        pass
+        Remark.objects.create(remark_id=self._comment_id, scores=self._comment_trend,
+                              remark_date=self._create_time, diagnose_id=self._diagnose_id,
+                              remark=self._comment_info)
 
 
 class PaymentSystem:
@@ -847,7 +1075,24 @@ class PatientSystem:
         """
         p_info = PatientInfo(p_id=patient_id)
         p_info.load_all_from_database(p_id=patient_id)
+        p_dict = []
+        p_dict['']
         return p_info
+
+    @staticmethod
+    def load_history_diagnose_id(patient_id):
+        # TODO: 加载历史诊断单信息，按时间顺序由最近至最远排列，返回id列表
+        diag_his = Diagnose.objects.filter(pid=patient_id).order_by('diagnose_date').reverse()
+        return_ls = []
+        for i in diag_his:
+            return_ls.append(i.diagnose_id)
+        print(return_ls)
+        return return_ls
+
+    @staticmethod
+    def load_history_check_id(patient_id):
+        # TODO: 加载历史检查单信息，按时间顺序由最近至最远排列，返回id列表
+        return []
 
     @staticmethod
     def registration(name, age, gender, password):
@@ -900,6 +1145,12 @@ class MedicineSystem:
     def add_medicine(medicine_id, add_num):
         # TODO:增加药品库存，可能没用，可删
         pass
+
+    @staticmethod
+    def fast_find_medicine(fast_spell):
+        medicine_info = MedicineInfo()
+        medicine_info.find_fast_spell(fast_spell=fast_spell)
+        return [medicine_info.get_id(), medicine_info.get_name()]
 
     @staticmethod
     def prescribe_medicine(diagnose_id, medicine_info_list: List[tuple]):
@@ -960,9 +1211,22 @@ class CheckSystem:
         check_info.load_all_from_database(check_id=check_id)
         check_info.update_check_info(attr=attr, value=value)
 
+    @staticmethod
+    def get_possible_check():
+        """返回所有可以开的检查 字典列表：【{ID，名称}，{}】"""
+        check = CheckItem.objects.all().values()
+        return_ls = []
+        for item in check:
+            return_ls.append({'ID': item['check_id'], 'name': item['check_name']})
+        # print(return_ls)
+        return return_ls
+
 
 class CommentSystem:
     """评论系统，用户对医生做出评价"""
+
+    def __init__(self):
+        pass
 
     @staticmethod
     def make_comment(diagnose_id, comment_info):
@@ -1002,9 +1266,11 @@ class DiagnoseSystem:
         :param check_info: 检查明细，为列表
         :return:
         """
+        diag_num = diagnose_id.split('DIAGNOSE')[-1]
+        new_check_info_list = [diag_num+i.split('CHECK')[-1] for i in check_info]
         diag_info = DiagnoseInfo()
         diag_info.load_all_from_database(diagnose_id=diagnose_id)
-        patient_check_info = PatientCheckInfo(diagnose_info=diag_info)
+        patient_check_info = PatientCheckInfo(diagnose_id=diagnose_id)
 
         patient_check_info.create_id()
         patient_check_info.create_prescribe_check(check_name=check_info)
@@ -1071,89 +1337,183 @@ class RegisterSystem:
         schedule_info = ScheduleInfo(doctor_id=doctor_id, date=date)
         schedule_info.add_register(register_id=register_info.get_id(), date=date)
 
+    @staticmethod
+    def find_latest_register_info(doctor_id, patient_id):
+        """TODO:根据医生id与病人id查找最新的挂号id，还有病人详情"""
+        regs_info = RegisterInfo(doctor_id=doctor_id, patient_id=patient_id)
+        patient_info = PatientInfo()
+        patient_info.load_all_from_database(p_id=patient_id)
+        regs_detail_dict = {'regs_id': regs_info.find_latest_id(),
+                            'name': patient_info.get_info('name'),
+                            'gender': patient_info.get_info('gender'),
+                            'age': patient_info.get_info('age')}
+        return regs_detail_dict
 
-class CommentAnalysisSystem:
-    """情感分析系统，主要分析病人评论，使用前需要初始化"""
 
-    def __init__(self):
-        self.stop_punctuation = string.punctuation + ':#0123456789，。！@#…*（）-+=】【】；：[]丶、~《》～？”' + ' ' + '\xa0' + '\n' + '\ue627' + '\r' + '\u3000'
-        self.stop_list = []
-        with open('LSTM_model/stopwords_list.txt', 'r') as f:
-            while True:
-                line = f.readline()
-                if not line:
-                    break
-                line = line.strip()  # 去除\n
-                self.stop_list.append(line)
-        with open('LSTM_model/dict_酒店.pkl', 'rb') as f:
-            self.w2indx = pickle.load(f)  # 读取储存的数据
-            self.w2vec = pickle.load(f)
-        self.LSTM_model = load_model('LSTM_model/酒店_LSTM.h5')
+class DoctorSystem:
+    """医生系统"""
 
-    def single_predict(self, sentence):
-        """
-        输入一条单句，返回单句评分
-        :param sentence: 单句
-        :return: 评分，float
-        """
+    @staticmethod
+    def get_doctor_patient_num(doctor_id, date):
+        """某医生ID下的已看病人数和未看病人数，【已看病人数，未看病人数】"""
+        schedule_info = ScheduleInfo(doctor_id=doctor_id)
+        schedule_info.load_all_from_database(doctor_id=doctor_id, date=date)
+        return [schedule_info.get_register_number(),
+                schedule_info.get_max_register_number() - schedule_info.get_register_number()]
 
-        text = str(sentence)
-        for punctuation in self.stop_punctuation:
-            text = text.replace(punctuation, '')
-        word_list = list(jieba.cut(text))
+    @staticmethod
+    def get_doctor_patient(doctor_id, date):
+        """某医生ID下的已看病人，字典形式：{ID：【姓名，年龄】}"""
+        schedule_info = ScheduleInfo(doctor_id=doctor_id)
+        schedule_info.load_all_from_database(doctor_id=doctor_id, date=date)
+        register_list = schedule_info.get_register()
+        patient_dict = {}
+        for register in register_list:
+            regs_info = RegisterInfo()
+            regs_info.load_all_from_database(register_id=register)
+            if regs_info.get_status() == 2:
+                patient_info = PatientInfo()
+                patient_info.load_all_from_database(p_id=regs_info.get_patient_id())
+                patient_dict['id'] = patient_info.get_info('id')
+                patient_dict['name'] = patient_info.get_info('name')
+                patient_dict['age'] = patient_info.get_info('age')
+        return patient_dict
 
-        for word in word_list:
-            if word in self.stop_list:
-                while word in word_list:
-                    word_list.remove(word)
-
-        new_sentences = []
-        for word in sentence:
-            new_sentences.append(np.array(self.w2indx.get(word, 0)))  # 单词转索引数字
-        sentence_array = np.array([new_sentences])
-        pad_sentence_array = sequence.pad_sequences(list(sentence_array), maxlen=150)
-        predict_list = self.LSTM_model.predict(pad_sentence_array)
-        print(sentence, predict_list[0][0])
-        return predict_list[0][0]
-
-    def multiple_predict(self, raw_sentence_list):
-        """提供医生id，返回该医生的所有评价综合评分"""
-        """很奇怪，输入数组的时候与输入单个句子会不一样，每生成一条评论就存一次数据库"""
-        # raw_sentence_list = CommentSystem.find_all_comment(doctor_id)
-        processed_text_list = []
-        for text in raw_sentence_list:
-            text = str(text)
-            for punctuation in self.stop_punctuation:
-                text = text.replace(punctuation, '')
-            word_list = list(jieba.cut(text))
-            for word in word_list:
-                if word in self.stop_list:
-                    while word in word_list:
-                        word_list.remove(word)
-            processed_text_list.append(word_list)
-
-        new_sentences = []
-        for sen in processed_text_list:
-            new_sen = []
-            for word in sen:
-                new_sen.append(self.w2indx.get(word, 0))  # 单词转索引数字
-            new_sentences.append(np.array(new_sen))
-        sentence_array = np.array(new_sentences)  # 转numpy数组
-        pad_sentence_array = sequence.pad_sequences(list(sentence_array), maxlen=150)
-        predict_list = self.LSTM_model.predict(pad_sentence_array)
-        predict_list = list(np.array(predict_list).reshape((len(predict_list),)))
-        print(predict_list)
-        return predict_list
+    @staticmethod
+    def get_doctor_comment(doctor_id):
+        """根据医生ID读取评价评分（医生评分用评分均值，好评率为大于50数）"""
+        pass
 
 
 class SearchSystem:
-    """查询系统，可能用不上了"""
-    pass
+    """查询系统，完成与查询有关的所有函数"""
+
+    @staticmethod
+    def find_possible_check():
+        """TODO:从数据库获取所有检查信息，可以开具的检查（静态固定的6种检查）：字典列表：【{ID，名称}，{}】"""
+        check = CheckSystem()
+        check_info = check.get_possible_check()
+        return check_info
+
+    @staticmethod
+    def find_check_info(check_id):
+        return_list = []
+        """TODO:完成检查名称列表的加载"""
+        check_name_dict = {}
+        """提供该检查id下的详情，根据检查ID得到【名称，时间，【属性列表】，【对应值列表】】"""
+        check_info = PatientCheckInfo()
+        check_info.load_all_from_database(check_id=check_id)
+        print()
+        check = CheckItem.objects.get(check_id='CHECK' + str(check_id.split('_')[-1][1:]))
+        name = check.check_name
+        check_time = check_info.get_time()
+        attr_dict = check_info.get_check_info('all')
+        print(attr_dict)
+        return_list.append([name, check_time, list(attr_dict.keys()), list(attr_dict.values())])
+        return return_list
+
+    @staticmethod
+    def find_diagnose_check(diagnose_id):
+        """已开检查：字典列表，【{ID，名称，时间，状态（三种：未缴费、已缴费、已结束）}，{}，{}】"""
+        diag_info = DiagnoseInfo()
+        diag_info.load_all_from_database(diagnose_id=diagnose_id)
+        check_info_ls = diag_info.get_check()
+        check_dict_ls = []
+        for check in check_info_ls:
+            check_info_id = 'CHECK' + str(check.split('_')[-1][1:])
+            # print(check_info_id, check)
+            check_info = CheckInfo()
+            patient_check_info = PatientCheckInfo()
+            check_info.load_all_from_database(check_id=check_info_id)
+            patient_check_info.load_all_from_database(check_id=check)
+            check_dict = {'id': check, 'name': check_info.get_name(),
+                          'time': patient_check_info.get_time(), 'status': patient_check_info.get_status()}
+            # print(check_dict)
+            check_dict_ls.append(check_dict)
+        return check_dict_ls
+
+    @staticmethod
+    def find_history_diagnose_info(patient_id):
+        """history网页独有，当前患者ID下的所有历史诊断ID：
+        # 1、字典列表：【{诊断ID，科室，诊断}，{}，{}】"""
+        history_diagid_ls = PatientSystem().load_history_diagnose_id(patient_id)
+        return_ls = []
+        for diag_id in history_diagid_ls:
+            diag_info = DiagnoseInfo()
+            diag_info.load_all_from_database(diagnose_id=diag_id)
+            doctor_info = DoctorInfo()
+            doctor_info.load_all_from_database(doctor_id=diag_info.get_doctor_id())
+            diag_info_str = diag_info.get_diagnose_info()
+            return_ls.append({'diagnose_id': diag_id,
+                              'dept': doctor_info.get_dept(),
+                              'diagnose_info': diag_info_str})
+        return return_ls
+
+    @staticmethod
+    def find_basic_diagnose_info(diagnose_id):
+        """1、基本信息：字典形式{姓名，性别，生日，挂号ID}"""
+        diag_info = DiagnoseInfo()
+        diag_info.load_all_from_database(diagnose_id=diagnose_id)
+        patient_info = PatientInfo()
+        patient_info.load_all_from_database(p_id=diag_info.get_patient_id())
+        return {'name': patient_info.get_info(attr='name'),
+                'gender': patient_info.get_info(attr='gender'),
+                'age': patient_info.get_info(attr='age'),
+                'register_id': diag_info.get_register_id()}
+
+    @staticmethod
+    def find_diagnose_prescribe(diagnose_id):
+        """返回诊断文本信息"""
+        diag_info = DiagnoseInfo()
+        diag_info.load_all_from_database(diagnose_id)
+        return diag_info.get_diagnose_info()
+
+    @staticmethod
+    def find_diagnose_medicine(diagnose_id):
+        """已开药品：字典列表，【{ID，名称，数量}，{}，{}】"""
+        diag_info = DiagnoseInfo()
+        diag_info.load_all_from_database(diagnose_id)
+        medicine_info_dict = diag_info.get_medicine_info()
+        # print(medicine_info_dict)
+        return_ls = []
+        for medicine_id, amount in medicine_info_dict.items():
+            medi_info = MedicineInfo()
+            medi_info.load_all_from_database(medicine_id=medicine_id)
+            return_ls.append({'ID':medicine_id, 'name': medi_info.get_name(), 'amount': amount})
+        return return_ls
+
+    @staticmethod
+    def find_history_check_info(patient_id):
+        """# 1、字典列表：【{检查ID，日期，名称，诊断}，{}，{}】"""
+        history_diag_ls = PatientSystem().load_history_diagnose_id(patient_id)
+        return_ls = []
+        for diag_id in history_diag_ls:
+            diag_info = DiagnoseInfo()
+            diag_info.load_all_from_database(diagnose_id=diag_id)
+            check_info = SearchSystem.find_diagnose_check(diagnose_id=diag_id)
+            for check in check_info:
+                return_ls.append({'check_id': check['id'],
+                                  'date': check['time'],
+                                  'name': check['name']})
+        return return_ls
 
 
 class AIDiagnoseSystem:
     """智能诊断系统"""
     pass
+
+
+# print(RegisterSystem.find_latest_register_info(doctor_id=10248, patient_id=2110))
+# print(SearchSystem.find_diagnose_check(diagnose_id='DIAGNOSE1'))
+# print(SearchSystem.find_possible_check())
+# print(SearchSystem.find_diagnose_prescribe(diagnose_id='DIAGNOSE1'))
+# print(SearchSystem.find_diagnose_medicine(diagnose_id='DIAGNOSE1'))
+# DiagnoseSystem.create_check(diagnose_id='DIAGNOSE1', check_info=['CHECK1']) 【增加部分待完成】
+# print(SearchSystem.find_check_info(check_id='D1_C9'))
+# print(SearchSystem.find_history_diagnose_info(patient_id=2110))
+# print(SearchSystem.find_basic_diagnose_info(diagnose_id='DIAGNOSE1'))
+# print(SearchSystem.find_history_check_info(patient_id=2110))
+print(MedicineSystem.fast_find_medicine('aspl'))
 
 
 # TODO:有些类之间传类变量感觉冗余，能传id尽量传id。
@@ -1162,6 +1522,48 @@ class AIDiagnoseSystem:
 # TODO:评论未完成
 # TODO:某些状态检查支付没有做，要保证按顺序调用函数
 
-CommentAnalysisSystem().single_predict('医术高明，妙手回春')
-CommentAnalysisSystem().single_predict('垃圾医生')
-CommentAnalysisSystem().multiple_predict(['医术高明，妙手回春', '垃圾医生'])
+# CommentAnalysisSystem().single_predict('医术高明，妙手回春')
+# CommentAnalysisSystem().single_predict('垃圾医生')
+# CommentAnalysisSystem().multiple_predict(['医术高明，妙手回春', '垃圾医生'])
+
+
+# 所有网页共用：
+# 1、某医生ID下的已看病人数和未看病人数，【已看病人数，未看病人数】 -> DoctorSystem.get_doctor_patient_num(doctor_id, date)
+# 2、某医生ID下的已看病人，字典形式：{ID，姓名，年龄} -> DoctorSystem.get_doctor_patient(doctor_id, date)
+# 3、当前医生ID下的评级和好评比率，【星级数，好评比率】-> DoctorSystem.get_doctor_comment(doctor_id)
+
+# index页面独有（根据医生doc和患者pat获得的“最新”“诊断ID”下的信息：
+# 1、基本信息：字典形式{姓名，性别，生日，挂号ID} -> RegisterSystem.find_latest_register_info(doctor_id, patient_id) 【已完成】
+# 2、已开检查：字典列表，【{ID，名称，时间，状态（三种：未缴费、已缴费、已结束）}，{}，{}】 -> SearchSystem.find_diagnose_check(diagnose_id)【已完成，check_id待更改】
+# 3、可以开具的检查（静态固定的6种检查）：字典列表：【{ID，名称}，{}】-> CheckSystem.find_check 【已完成】
+# 4、诊断内容：文本 -> SearchSystem.find_diagnose_prescribe(diagnose_id) 获得诊断信息 【已完成】
+# 5、已开药品：字典列表，【{ID，名称，数量}，{}，{}】 SearchSystem.find_diagnose_medicine(diagnose_id) 【已完成】
+
+# 将要开的检查存入数据库，得到一个ID列表，写入当前诊断ID或者挂号ID下的数据库中 -> DiagnoseSystem.create_check(diagnose_id, check_info: list)
+# 将要开的药品存入数据库：【（ID，数量），】，如果数量检测为0，在原数据库中删除该药品 -> DiagnoseSystem.create_medicine(diagnose_id, medicine_info: List[tuple])
+# 根据所得简写检索得到药品列表[id，名称]，改写message后发送给前端 -> MedicineSystem.fast_find_medicine(药品简写)
+# 更新诊断数据库
+# 提供该检查id下的详情，根据检查ID得到【名称，时间，【属性列表】，【对应值列表】】-> SearchSystem.find_check_info(check_id)【已完成】
+
+# history网页独有，当前患者ID下的所有历史诊断ID：【有下面的了，不需要这个】
+# 1、字典列表：【{诊断ID，科室，诊断}，{}，{}】-> SearchSystem.find_diagnose_info【已完成】
+
+# check网页独有，当前患者ID下的所有历史检查ID： id从字典列表里面取
+# 1、字典列表：【{检查ID，日期，名称，诊断}，{}，{}】
+# 提供该检查id下的详情
+# 根据检查ID得到【名称，时间，【属性列表】，【对应值列表】】 SearchSystem.find_check_info
+
+# decide网页独有：
+# 1、字典，{各属性}   （由于属性太多，请给每个属性都取个名字，然后把值传给我，没有就空字符串）
+
+# arrange网页独有,当前医生doc下的本日病人：
+# 1、字典列表，【{病人ID，姓名，年龄}，{}，{}】
+# 2、列表，周一到周五的安排看诊数【1,2,3,4,5,6,7】
+
+# evaluation网页独有,当前医生doc下评价：
+# 1、不同星级的评价数，列表【一星，二星，三星，四星，五星】
+# 2、好评数、差评数，【好评数，差评数】
+# 近期评价，【{1，日期，内容，星级}，{2，日期，内容，星级}，{3，日期，内容，星级}】按时间排序并根据顺序给出ID
+
+# p_info = PatientSystem.load_patient_info(patient_id=2110)
+# print(p_info.get_info('age'))
